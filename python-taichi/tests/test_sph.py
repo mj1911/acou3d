@@ -101,3 +101,47 @@ def test_pressure_matches_linear_eos():
     # with the 0.02 Pa "noise floor" threshold used elsewhere in this plan
     # (see Task 11's monopole-radiation probe-detection threshold).
     np.testing.assert_allclose(solver.pressure.to_numpy(), expected, rtol=1e-5, atol=0.02)
+
+
+def _two_particle_solver(h, dx, extra_grid_margin=0.5):
+    mass = sph.RHO0 * dx ** 3
+    pos_np = np.array([[0.0, 0.0, 0.0], [dx, 0.0, 0.0]], dtype=np.float32)
+    n = 2
+    cell_size = 2 * h
+    grid = Grid(n_cells=8, cell_size=cell_size, grid_min=(-extra_grid_margin,) * 3, max_particles=n)
+    solver = Solver(n, h, mass, grid)
+    solver.pos.from_numpy(pos_np)
+    grid.clear()
+    grid.build(solver.pos, n)
+    return solver, grid
+
+
+def test_pressure_force_obeys_newtons_third_law():
+    h, dx = 0.05, 0.03
+    solver, grid = _two_particle_solver(h, dx)
+
+    solver.compute_density()
+    rho = solver.rho.to_numpy()
+    rho[0] *= 1.2  # perturb so pressure differs between the two particles
+    solver.rho.from_numpy(rho)
+    solver.compute_pressure()
+    solver.compute_forces()
+
+    acc = solver.acc.to_numpy()
+    np.testing.assert_allclose(solver.mass * acc[0], -solver.mass * acc[1], rtol=1e-5, atol=1e-8)
+
+
+def test_viscosity_damps_approaching_particles():
+    h, dx = 0.05, 0.03
+    solver, grid = _two_particle_solver(h, dx)
+    solver.vel.from_numpy(np.array([[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]], dtype=np.float32))
+
+    solver.compute_density()
+    solver.compute_pressure()
+    solver.compute_forces()
+
+    acc = solver.acc.to_numpy()
+    # particle 0 (at x=0) moving toward particle 1 (at x=dx) should decelerate;
+    # particle 1 moving toward particle 0 should likewise decelerate.
+    assert acc[0][0] < 0.0
+    assert acc[1][0] > 0.0

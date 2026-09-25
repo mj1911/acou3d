@@ -87,3 +87,33 @@ class Solver:
     def compute_pressure(self):
         for i in range(self.n):
             self.pressure[i] = C0 ** 2 * (self.rho[i] - RHO0)
+
+    @ti.kernel
+    def compute_forces(self):
+        for i in range(self.n):
+            h = self.h
+            a = ti.Vector([0.0, 0.0, 0.0])
+            pi_over_rho2 = self.pressure[i] / (self.rho[i] ** 2)
+            c = self.grid.cell_coord(self.pos[i])
+            for di, dj, dk in ti.ndrange((-1, 2), (-1, 2), (-1, 2)):
+                cc = c + ti.Vector([di, dj, dk])
+                if 0 <= cc[0] < self.grid.n_cells and 0 <= cc[1] < self.grid.n_cells and 0 <= cc[2] < self.grid.n_cells:
+                    cnt = min(self.grid.cell_count[cc[0], cc[1], cc[2]], self.grid.max_per_cell)
+                    for s in range(cnt):
+                        j = self.grid.cell_particles[cc[0], cc[1], cc[2], s]
+                        if j != i:
+                            rij = self.pos[i] - self.pos[j]
+                            r = rij.norm()
+                            if r < 2.0 * h:
+                                gw = kernel_grad_w(rij, h)
+                                pj_over_rho2 = self.pressure[j] / (self.rho[j] ** 2)
+                                a -= self.mass * (pi_over_rho2 + pj_over_rho2) * gw
+
+                                vij = self.vel[i] - self.vel[j]
+                                vr = vij.dot(rij)
+                                if vr < 0.0:
+                                    rho_bar = 0.5 * (self.rho[i] + self.rho[j])
+                                    mu = h * vr / (rij.dot(rij) + 0.01 * h * h)
+                                    pi_visc = (-ALPHA_VISC * C0 * mu) / rho_bar
+                                    a -= self.mass * pi_visc * gw
+            self.acc[i] = a
