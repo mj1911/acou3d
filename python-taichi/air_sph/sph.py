@@ -51,3 +51,34 @@ def kernel_grad_w(rij, h: ti.f32):
     if r > 1e-12:
         grad = dw * (rij / r)
     return grad
+
+
+@ti.data_oriented
+class Solver:
+    def __init__(self, n, h, mass, grid):
+        self.n = n
+        self.h = h
+        self.mass = mass
+        self.grid = grid
+        self.pos = ti.Vector.field(3, dtype=ti.f32, shape=n)
+        self.vel = ti.Vector.field(3, dtype=ti.f32, shape=n)
+        self.acc = ti.Vector.field(3, dtype=ti.f32, shape=n)
+        self.rho = ti.field(dtype=ti.f32, shape=n)
+        self.pressure = ti.field(dtype=ti.f32, shape=n)
+
+    @ti.kernel
+    def compute_density(self):
+        for i in range(self.n):
+            h = self.h
+            rho_i = 0.0
+            c = self.grid.cell_coord(self.pos[i])
+            for di, dj, dk in ti.ndrange((-1, 2), (-1, 2), (-1, 2)):
+                cc = c + ti.Vector([di, dj, dk])
+                if 0 <= cc[0] < self.grid.n_cells and 0 <= cc[1] < self.grid.n_cells and 0 <= cc[2] < self.grid.n_cells:
+                    cnt = min(self.grid.cell_count[cc[0], cc[1], cc[2]], self.grid.max_per_cell)
+                    for s in range(cnt):
+                        j = self.grid.cell_particles[cc[0], cc[1], cc[2], s]
+                        r = (self.pos[i] - self.pos[j]).norm()
+                        if r < 2.0 * h:
+                            rho_i += self.mass * kernel_w(r, h)
+            self.rho[i] = rho_i
