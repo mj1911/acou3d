@@ -136,7 +136,13 @@ def test_viscosity_damps_approaching_particles():
     solver, grid = _two_particle_solver(h, dx)
     solver.vel.from_numpy(np.array([[1.0, 0.0, 0.0], [-1.0, 0.0, 0.0]], dtype=np.float32))
 
-    solver.compute_density()
+    # Bypass compute_density(): with only 1 neighbor in range, an isolated
+    # 2-particle system grossly underestimates density (SPH summation needs
+    # many neighbors to be accurate), which produces an enormous spurious
+    # pressure-gradient force that swamps the viscosity term this test means
+    # to isolate. Setting rho = RHO0 directly makes pressure exactly zero for
+    # both particles, so only viscosity contributes to compute_forces().
+    solver.rho.from_numpy(np.array([sph.RHO0, sph.RHO0], dtype=np.float32))
     solver.compute_pressure()
     solver.compute_forces()
 
