@@ -3,6 +3,7 @@ boundary, and (optionally) the real-time viewer into one simulation loop.
 
 Usage:
     python -m air_sph.demo                    # interactive viewer
+    python -m air_sph.demo --slice            # 2D cross-section through the source
     python -m air_sph.demo --offline --steps 200
 """
 import argparse
@@ -15,6 +16,16 @@ from air_sph import boundary, sph, source
 from air_sph.grid import Grid
 from air_sph.sph import Solver
 from air_sph.viewer import Viewer
+
+DEFAULT_FREQ = 500.0       # Hz
+DEFAULT_PPW = 20           # particles per wavelength at DEFAULT_FREQ
+DEFAULT_N = 40             # particles per axis
+DEFAULT_AMPLITUDE = 0.05   # source surface velocity, m/s
+WARMUP_PERIODS = 1
+ACTIVE_CYCLES = 3
+# Source force width, in smoothing lengths (1.5 h ~ 2 particle spacings): wide
+# enough to have no lattice-scale content, narrow compared with a wavelength.
+SOURCE_SIGMA_H = 1.5
 
 
 def build_lattice(n_per_axis, dx):
@@ -34,24 +45,36 @@ def probe_pressure(pos_np, pressure_np, probe_pos, radius):
     return float(pressure_np[mask].mean())
 
 
-def burst_amplitude(t, freq, base_amplitude, warmup_periods=1, active_cycles=1, silent_cycles=10):
-    """Gate the source amplitude into a repeating burst pattern.
+def burst_end_time(freq, warmup_periods=WARMUP_PERIODS, active_cycles=ACTIVE_CYCLES):
+    """Time at which the first burst's drive stops."""
+    return (warmup_periods + active_cycles) / freq
 
-    Silent for `warmup_periods` periods, then repeats indefinitely: driven at
-    `base_amplitude` for `active_cycles` periods, silent for `silent_cycles`
-    periods. `t` (simulation time) is never altered or reset -- gating is a
-    pure 0/1 multiplier on top of the source's own continuous sin(2*pi*f*t)
-    phase, so every on/off transition lands exactly on a zero-crossing of the
-    underlying wave rather than needing separate phase bookkeeping.
+
+def burst_amplitude(t, freq, base_amplitude, warmup_periods=WARMUP_PERIODS,
+                    active_cycles=ACTIVE_CYCLES, silent_cycles=10):
+    """Envelope the source amplitude into a repeating, smoothly windowed burst.
+
+    Silent for `warmup_periods` periods, then repeats indefinitely: a
+    Hann-windowed burst of `active_cycles` periods, then `silent_cycles`
+    periods of silence. `t` is never altered or reset -- the envelope
+    multiplies the source's own continuous sin(2*pi*f*t).
+
+    Why a Hann window rather than a hard on/off gate: the SPH medium has a
+    frequency ceiling (~c0 / (4.8 dx), where waves stop carrying energy; see
+    tests/test_propagation.py). A hard gate sprays energy across a wide band,
+    and whatever lands near that ceiling stays trapped around the source and
+    rings. The window keeps the burst's spectrum near `freq`.
     """
     period = 1.0 / freq
     warmup = warmup_periods * period
     if t < warmup:
         return 0.0
-    cycle_len = active_cycles + silent_cycles
-    cycle_index = int((t - warmup) / period)
-    position = cycle_index % cycle_len
-    return base_amplitude if position < active_cycles else 0.0
+    cycle_len = (active_cycles + silent_cycles) * period
+    tau = (t - warmup) % cycle_len
+    active = active_cycles * period
+    if tau >= active:
+        return 0.0
+    return base_amplitude * np.sin(np.pi * tau / active) ** 2
 
 
 def color_scale(pressure_np):
@@ -117,6 +140,26 @@ def update_radii(pressure: ti.template(), radii: ti.template(), n: ti.i32, scale
         radii[i] = base_radius * (_MIN_RADIUS_FRACTION + (_MAX_RADIUS_FRACTION - _MIN_RADIUS_FRACTION) * p)
 
 
+@ti.kernel
+def slice_radii(in_slice: ti.template(), radii: ti.template(), n: ti.i32, radius: ti.f32):
+    """Show only slice particles, at a fixed size; everything else gets radius 0."""
+    for i in range(n):
+        radii[i] = radius if in_slice[i] == 1 else 0.0
+
+
+def slice_mask(pos_np, dx):
+    """Particles in the single lattice layer nearest z = 0 (the source plane).
+
+    The lattice is centred on the origin, so with an even particle count per
+    axis there is no layer at exactly z = 0; the layer at +dx/2 is used. The
+    selection is made once: acoustic displacements (~2e-4 dx) never move a
+    particle out of its layer.
+    """
+    z = pos_np[:, 2]
+    z_layer = z[np.argmin(np.abs(z - 1e-6 * dx))]
+    return np.abs(z - z_layer) < 0.25 * dx
+
+
 def build_sim(freq, ppw, n_per_axis):
     dx = (sph.C0 / freq) / ppw
     h = 1.3 * dx
@@ -152,15 +195,19 @@ def build_sim(freq, ppw, n_per_axis):
     # to_numpy copy) -- see Grid.check_no_overflow.
     grid.check_no_overflow()
 
-    src_radius = 1.5 * dx
-    is_source_np = (np.linalg.norm(pos0, axis=1) < src_radius).astype(np.int32)
-    is_source = ti.field(dtype=ti.i32, shape=n)
-    is_source.from_numpy(is_source_np)
-
-    return solver, grid, is_source, dx, half_extent
+    return solver, grid, dx, half_extent
 
 
-def step(solver, grid, is_source, dt, t, freq, amplitude, center, r_start, r_domain, damping_max):
+def source_accel(t, freq, amplitude):
+    """Peak acceleration of the smooth source force at time t (see
+    source.apply_smooth_monopole): amplitude * w * cos(w t), so the air near the
+    source moves with velocity of order amplitude * sin(w t). Shared with the
+    FDTD reference (air_sph.validation) so both are driven identically."""
+    w = 2.0 * np.pi * freq
+    return amplitude * w * np.cos(w * t)
+
+
+def step(solver, grid, dt, t, freq, amplitude, center, r_start, r_domain, damping_max):
     solver.leapfrog_predict(dt)
     grid.clear()
     grid.build(solver.pos, solver.n)
@@ -168,17 +215,12 @@ def step(solver, grid, is_source, dt, t, freq, amplitude, center, r_start, r_dom
     solver.compute_pressure()
     solver.compute_forces()
     solver.leapfrog_correct(dt)
-    # Known, measured, accepted ordering imprecision: the prescribed source
-    # velocity is written here, AFTER leapfrog_correct, but the next step's
-    # leapfrog_predict applies its half-kick (vel += 0.5*dt*acc) before the
-    # drift -- so the solver's own acceleration perturbs the prescribed velocity
-    # by ~5-12% before it moves the particle. The source is therefore driven
-    # slightly off its nominal amplitude. Left as-is deliberately: reordering
-    # the integration loop is a far riskier change than the error it would
-    # remove. Not an unnoticed bug -- see the final whole-branch review in the
-    # plan ledger.
-    source.apply_monopole(solver.pos, solver.vel, is_source, solver.n, center, amplitude, freq, t)
+    source.apply_smooth_monopole(solver.pos, solver.vel, solver.n, center,
+                                 source_accel(t, freq, amplitude), SOURCE_SIGMA_H * solver.h, dt)
+    # Impedance-matched absorbing shell: damp velocity and pressure equally.
     boundary.apply_sponge(solver.pos, solver.vel, solver.n, center, r_start, r_domain, damping_max, dt)
+    boundary.relax_pressure(solver.pos, solver.rho, solver.rho0, solver.n, center, r_start, r_domain,
+                            damping_max, dt)
 
 
 def init_taichi(offline):
@@ -199,18 +241,20 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--offline", action="store_true", help="run headless, no viewer")
     parser.add_argument("--steps", type=int, default=600)
-    parser.add_argument("--freq", type=float, default=1000.0)
-    parser.add_argument("--ppw", type=int, default=10, help="particles per wavelength")
-    parser.add_argument("--n", type=int, default=40, help="particles per axis")
+    parser.add_argument("--freq", type=float, default=DEFAULT_FREQ)
+    parser.add_argument("--ppw", type=int, default=DEFAULT_PPW, help="particles per wavelength")
+    parser.add_argument("--n", type=int, default=DEFAULT_N, help="particles per axis")
+    parser.add_argument("--slice", action="store_true",
+                        help="show only the particle layer through the source, viewed face-on")
     args = parser.parse_args()
 
     init_taichi(args.offline)
 
-    solver, grid, is_source, dx, half_extent = build_sim(args.freq, args.ppw, args.n)
+    solver, grid, dx, half_extent = build_sim(args.freq, args.ppw, args.n)
     center = ti.Vector([0.0, 0.0, 0.0])
     h = solver.h
     dt = 0.3 * h / sph.C0
-    amplitude = 0.05
+    amplitude = DEFAULT_AMPLITUDE
     r_start = 0.7 * half_extent
     r_domain = half_extent
     # Sponge strength must scale with the geometry: the shell is crossed in
@@ -225,7 +269,15 @@ def main():
     colors = ti.Vector.field(3, dtype=ti.f32, shape=solver.n) if not args.offline else None
     radii = ti.field(dtype=ti.f32, shape=solver.n) if not args.offline else None
     base_radius = 0.3 * dx
-    viewer = Viewer() if not args.offline else None
+    in_slice = None
+    if args.slice and not args.offline:
+        mask_np = slice_mask(solver.pos.to_numpy(), dx)
+        in_slice = ti.field(dtype=ti.i32, shape=solver.n)
+        in_slice.from_numpy(mask_np.astype(np.int32))
+        # Face-on along -z; far enough back that the whole slice fits the default 45 deg FOV.
+        viewer = Viewer(camera_pos=(0.0, 0.0, 2.6 * half_extent))
+    else:
+        viewer = Viewer() if not args.offline else None
 
     t = 0.0
     # Scaled to the domain rather than a fixed 0.2 m: half_extent depends on
@@ -236,7 +288,7 @@ def main():
           f"dt={dt:.3e} s, damping_max={damping_max:.1f}")
     for i in range(args.steps):
         gated_amplitude = burst_amplitude(t, args.freq, amplitude)
-        step(solver, grid, is_source, dt, t, args.freq, gated_amplitude, center, r_start, r_domain, damping_max)
+        step(solver, grid, dt, t, args.freq, gated_amplitude, center, r_start, r_domain, damping_max)
         t += dt
 
         if args.offline:
@@ -248,9 +300,15 @@ def main():
         else:
             if not viewer.running:
                 break
-            scale = color_scale(solver.pressure.to_numpy())
-            update_colors(solver.pressure, colors, solver.n, scale)
-            update_radii(solver.pressure, radii, solver.n, scale, base_radius)
+            pressure_np = solver.pressure.to_numpy()
+            if in_slice is not None:
+                scale = color_scale(pressure_np[mask_np])
+                update_colors(solver.pressure, colors, solver.n, scale)
+                slice_radii(in_slice, radii, solver.n, 0.5 * dx)
+            else:
+                scale = color_scale(pressure_np)
+                update_colors(solver.pressure, colors, solver.n, scale)
+                update_radii(solver.pressure, radii, solver.n, scale, base_radius)
             viewer.render(solver.pos, radius=base_radius, colors_field=colors, radii_field=radii)
 
 

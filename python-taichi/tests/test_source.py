@@ -100,3 +100,30 @@ def test_monopole_singularity_guard_at_center():
     assert v[0][0] == pytest.approx(0.0, abs=1e-9)
     assert v[0][1] == pytest.approx(0.0, abs=1e-9)
     assert v[0][2] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_smooth_monopole_adds_gaussian_radial_kick():
+    """apply_smooth_monopole adds dt * accel * (r_vec / sigma) * exp(-r^2 / 2 sigma^2).
+
+    Radial, zero at the centre, smooth in space, and added to (not written
+    over) the existing velocity -- so it drives the air without pinning any
+    particles or imposing lattice-scale velocity jumps.
+    """
+    pts = np.array([[0.0, 0.0, 0.0],        # centre: no push
+                    [0.02, 0.0, 0.0],       # r = sigma along +x
+                    [0.0, -0.03, 0.04],     # off-axis, r = 2.5 sigma
+                    [1.0, 0.0, 0.0]],       # far away: negligible
+                   dtype=np.float32)
+    n = len(pts)
+    pos = ti.Vector.field(3, dtype=ti.f32, shape=n)
+    vel = ti.Vector.field(3, dtype=ti.f32, shape=n)
+    pos.from_numpy(pts)
+    vel.from_numpy(np.full((n, 3), 0.5, dtype=np.float32))
+    center = ti.Vector([0.0, 0.0, 0.0])
+    accel, sigma, dt = 100.0, 0.02, 1e-3
+
+    source.apply_smooth_monopole(pos, vel, n, center, accel, sigma, dt)
+
+    r = np.linalg.norm(pts, axis=1)
+    expected = 0.5 + dt * accel * pts / sigma * np.exp(-r**2 / (2 * sigma**2))[:, None]
+    np.testing.assert_allclose(vel.to_numpy(), expected, rtol=1e-4, atol=1e-7)

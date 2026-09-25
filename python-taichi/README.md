@@ -25,7 +25,9 @@ python -m venv .venv
 ```bash
 cd python-taichi   # if you are not already here
 .venv/bin/python -m air_sph.demo                  # interactive viewer
+.venv/bin/python -m air_sph.demo --slice          # face-on cross-section through the source
 .venv/bin/python -m air_sph.demo --offline         # headless, prints probe data
+.venv/bin/python -m air_sph.validation            # compare SPH with the FDTD reference solver
 .venv/bin/python -m pytest -q
 .venv/bin/python -m pytest -n auto -q         # same, parallelized across CPU cores
 ```
