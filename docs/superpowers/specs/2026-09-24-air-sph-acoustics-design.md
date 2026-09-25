@@ -200,6 +200,32 @@ style (e.g. `test_bem.py`'s "within 2%" checks):
    221 m/s with the matched one, for the same main burst), which is why it
    now compares waveforms.
 
+**SPH amplitude excess (2026-09-25).** At 0.25–0.40 m the SPH burst is
+13–23% louder than the FDTD reference driven by the same force. Near the
+source (0.10 m) the two agree. Two effects combine:
+
+- *Reflections* (a ±5% ripple). In the default domain, the SPH r·p rises
+  toward the absorbing shell and dips just before it. In a doubled domain
+  (shell at 0.95 m) this ripple disappears and r·p is flat, as a spherical
+  wave's should be.
+- *Dispersion* (the steady +13–15%). It remains in the doubled domain.
+  For a force-driven source in a dispersive medium, the radiated
+  far-field amplitude scales as c0 / v_g, where v_g is the group velocity:
+  the same injected power builds up more amplitude when energy moves away
+  more slowly. For SPH (kernel-smoothed density and pressure gradient,
+  ω = c0 k sinc⁴(kh/2)), a residue calculation gives the gain as
+  c0 / v_g × S(k_sph) / S(k0), where S is the source's spatial spectrum at the
+  SPH and true wavenumbers. Near 560 Hz, v_g ≈ 0.894 c0. Predicted
+  band-averaged gain 1.146–1.147; measured 1.134, 1.147, 1.158 at 0.30,
+  0.35 and 0.40 m. Per frequency (450–650 Hz) it agrees within ~5%, the
+  noise level of the short records.
+
+This is a property of the discretisation, not a bug, and it vanishes with
+resolution. Predicted excess at 560 Hz: +12% at 20 particles per wavelength
+(the demo), +5% at 30 (216k particles for the same domain), +2.7% at 40
+(~490k), +1.2% at 60 (~1.6M). Timing is unaffected: the burst still arrives
+within ~0.1 ms of the reference.
+
 **Impedance-matched absorbing shell (2026-09-25).** Damping only velocity
 changes the shell's acoustic impedance, so outgoing waves partly reflect off
 the damping gradient, and at 500 Hz the 0.2 m shell is under a third of a
@@ -220,8 +246,10 @@ tail fell from 5–16% to 1.2–2.2%.
    energy in the default domain, falling to 1–5% when the absorbing shell is
    0.4 m thick (as in the reference) instead of 0.2 m. So the tail is mostly
    reflection from the default shell, which is under a third of a wavelength
-   thick at 500 Hz. The residual 1–5% and a ~12–16% higher SPH amplitude at
-   0.2–0.4 m remain unexplained.
+   thick at 500 Hz. The residual 1–5% tail and a ~12–16% higher SPH
+   amplitude at 0.2–0.4 m were open questions. The tail was later fixed by the
+   impedance-matched shell, and the amplitude was explained (see "SPH amplitude
+   excess" below).
 
 **Deferred (not delivered in v1): precise 1/r amplitude-scaling validation.**
 The original target above — 1/r falloff "within a few percent, consistent with
