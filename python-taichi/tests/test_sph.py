@@ -83,3 +83,15 @@ def test_density_matches_rho0_in_bulk():
     interior = np.all(np.abs(pos_np) < (half_extent - margin), axis=1)
     assert interior.sum() > 0
     assert rho[interior] == pytest.approx(sph.RHO0, rel=0.1)
+
+
+def test_pressure_matches_linear_eos():
+    solver, grid, pos_np, half_extent, h = _make_lattice_solver(n_per_axis=4, dx=0.02)
+    n = pos_np.shape[0]
+    rho_np = sph.RHO0 + np.linspace(-0.05, 0.05, n).astype(np.float32)
+    solver.rho.from_numpy(rho_np)
+
+    solver.compute_pressure()
+
+    expected = sph.C0 ** 2 * (rho_np - sph.RHO0)
+    np.testing.assert_allclose(solver.pressure.to_numpy(), expected, rtol=5e-5)

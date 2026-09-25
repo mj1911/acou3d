@@ -82,3 +82,8 @@ class Solver:
                         if r < 2.0 * h:
                             rho_i += self.mass * kernel_w(r, h)
             self.rho[i] = rho_i
+
+    @ti.kernel
+    def compute_pressure(self):
+        for i in range(self.n):
+            self.pressure[i] = C0 ** 2 * (self.rho[i] - RHO0)
