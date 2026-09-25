@@ -6,6 +6,7 @@ Usage:
     python -m air_sph.demo --offline --steps 200
 """
 import argparse
+import ctypes.util
 
 import numpy as np
 import taichi as ti
@@ -184,8 +185,11 @@ def init_taichi(offline):
     if offline:
         ti.init(arch=ti.cpu)
         return
+    # ti.gpu tries CUDA first, which logs "libcuda.so lib not found" on every
+    # machine without an NVIDIA driver. Skip it there; other GPUs are unaffected.
+    gpu_archs = ti.gpu if ctypes.util.find_library("cuda") else [a for a in ti.gpu if a != ti.cuda]
     try:
-        ti.init(arch=ti.gpu)
+        ti.init(arch=gpu_archs)
     except Exception as exc:
         print(f"GPU backend initialization failed ({exc}); falling back to CPU.")
         ti.init(arch=ti.cpu)
