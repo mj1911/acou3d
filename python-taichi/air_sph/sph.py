@@ -65,6 +65,8 @@ class Solver:
         self.acc = ti.Vector.field(3, dtype=ti.f32, shape=n)
         self.rho = ti.field(dtype=ti.f32, shape=n)
         self.pressure = ti.field(dtype=ti.f32, shape=n)
+        self.rho0 = ti.field(dtype=ti.f32, shape=n)
+        self.rho0.fill(RHO0)
 
     @ti.kernel
     def compute_density(self):
@@ -84,9 +86,21 @@ class Solver:
             self.rho[i] = rho_i
 
     @ti.kernel
+    def capture_rest_density(self):
+        """Freeze each particle's current density as its own pressure
+        reference. Call once at t=0 for a quiescent, free-boundary lattice:
+        edge/corner particles have truncated kernel support and so
+        under-estimate density against the global RHO0 (a discretization
+        artifact, not a real density gradient); comparing against their own
+        captured value instead makes pressure exactly zero everywhere at
+        t=0, regardless of that artifact."""
+        for i in range(self.n):
+            self.rho0[i] = self.rho[i]
+
+    @ti.kernel
     def compute_pressure(self):
         for i in range(self.n):
-            self.pressure[i] = C0 ** 2 * (self.rho[i] - RHO0)
+            self.pressure[i] = C0 ** 2 * (self.rho[i] - self.rho0[i])
 
     @ti.kernel
     def compute_forces(self):
