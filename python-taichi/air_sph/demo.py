@@ -33,6 +33,26 @@ def probe_pressure(pos_np, pressure_np, probe_pos, radius):
     return float(pressure_np[mask].mean())
 
 
+def burst_amplitude(t, freq, base_amplitude, warmup_periods=1, active_cycles=1, silent_cycles=10):
+    """Gate the source amplitude into a repeating burst pattern.
+
+    Silent for `warmup_periods` periods, then repeats indefinitely: driven at
+    `base_amplitude` for `active_cycles` periods, silent for `silent_cycles`
+    periods. `t` (simulation time) is never altered or reset -- gating is a
+    pure 0/1 multiplier on top of the source's own continuous sin(2*pi*f*t)
+    phase, so every on/off transition lands exactly on a zero-crossing of the
+    underlying wave rather than needing separate phase bookkeeping.
+    """
+    period = 1.0 / freq
+    warmup = warmup_periods * period
+    if t < warmup:
+        return 0.0
+    cycle_len = active_cycles + silent_cycles
+    cycle_index = int((t - warmup) / period)
+    position = cycle_index % cycle_len
+    return base_amplitude if position < active_cycles else 0.0
+
+
 def color_scale(pressure_np):
     """Pick a pressure color scale from the current field.
 
@@ -198,7 +218,8 @@ def main():
     print(f"domain half_extent={half_extent:.4f} m, dx={dx:.5f} m, n={solver.n} particles, "
           f"dt={dt:.3e} s, damping_max={damping_max:.1f}")
     for i in range(args.steps):
-        step(solver, grid, is_source, dt, t, args.freq, amplitude, center, r_start, r_domain, damping_max)
+        gated_amplitude = burst_amplitude(t, args.freq, amplitude)
+        step(solver, grid, is_source, dt, t, args.freq, gated_amplitude, center, r_start, r_domain, damping_max)
         t += dt
 
         if args.offline:
