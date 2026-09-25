@@ -94,4 +94,10 @@ def test_pressure_matches_linear_eos():
     solver.compute_pressure()
 
     expected = sph.C0 ** 2 * (rho_np - sph.RHO0)
-    np.testing.assert_allclose(solver.pressure.to_numpy(), expected, rtol=5e-5)
+    # atol=0.02 Pa absorbs a small, fixed float32 rounding-floor difference
+    # between Taichi's compiled kernel and numpy's independent reference
+    # computation (measured ~0.01 Pa, roughly constant across all particles,
+    # not scaling with proximity to the rho=rho0 zero crossing) — consistent
+    # with the 0.02 Pa "noise floor" threshold used elsewhere in this plan
+    # (see Task 11's monopole-radiation probe-detection threshold).
+    np.testing.assert_allclose(solver.pressure.to_numpy(), expected, rtol=1e-5, atol=0.02)
