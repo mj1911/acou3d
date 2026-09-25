@@ -66,10 +66,13 @@ def update_colors(pressure: ti.template(), colors: ti.template(), n: ti.i32, sca
 # Taichi's GGUI particle renderer has no alpha/transparency channel, so
 # "97% transparent" for near-zero-pressure (white) particles is approximated
 # by shrinking their radius instead: 3% of base_radius at p=0, scaling up to
-# the full base_radius as |p| -> 1. This reads visually like fading out the
-# quiescent background while keeping the propagating wavefront full-size and
-# prominent, without needing renderer support that doesn't exist.
+# 20% of base_radius as |p| -> 1 (capped well below full size so even
+# saturated/wave particles stay small relative to the domain). This reads
+# visually like fading out the quiescent background while keeping the
+# propagating wavefront prominent, without needing renderer support that
+# doesn't exist.
 _MIN_RADIUS_FRACTION = 0.03
+_MAX_RADIUS_FRACTION = 0.20
 
 
 @ti.kernel
@@ -77,7 +80,7 @@ def update_radii(pressure: ti.template(), radii: ti.template(), n: ti.i32, scale
     for i in range(n):
         p = abs(pressure[i]) / scale
         p = min(p, 1.0)
-        radii[i] = base_radius * (_MIN_RADIUS_FRACTION + (1.0 - _MIN_RADIUS_FRACTION) * p)
+        radii[i] = base_radius * (_MIN_RADIUS_FRACTION + (_MAX_RADIUS_FRACTION - _MIN_RADIUS_FRACTION) * p)
 
 
 def build_sim(freq, ppw, n_per_axis):
