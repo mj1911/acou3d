@@ -361,10 +361,13 @@ def test_sponge_measurably_absorbs_outgoing_waves():
     mean_off = float(np.mean(energy_off[window:]))
 
     assert mean_on > 0.0 and mean_off > 0.0, "no acoustic energy reached the sponge shell"
-    # Measured ratio is ~10x; assert >= 3x so this stays a sharp check on the
-    # sponge doing real work while tolerating run-to-run variation.
-    assert mean_off >= 3.0 * mean_on, (
+    # Measured ratio is ~10-11x on a healthy sponge. The original broken
+    # damping_max=200 configuration (before this test existed) measures
+    # ~2.9-3.1x -- right on top of a naive 3x threshold, which would only
+    # catch that regression about 60% of the time. 6x keeps ~1.8x margin
+    # below the healthy value while rejecting the broken one reliably.
+    assert mean_off >= 6.0 * mean_on, (
         f"sponge is not measurably absorbing: shell energy with sponge on={mean_on:.3f}, "
-        f"off={mean_off:.3f} (ratio {mean_off / mean_on:.2f}x, need >= 3x). "
+        f"off={mean_off:.3f} (ratio {mean_off / mean_on:.2f}x, need >= 6x). "
         "damping_max is probably too weak to absorb a wave within the shell thickness."
     )

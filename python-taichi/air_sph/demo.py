@@ -37,7 +37,7 @@ def color_scale(pressure_np):
     """Pick a pressure color scale from the current field.
 
     A fixed scale saturates: measured pressures in the default configuration
-    reach ~11 Pa near the source, so a 1.0 Pa scale clips almost the whole
+    reach ~39 Pa near the source, so a 1.0 Pa scale clips almost the whole
     domain to solid red/blue and shows no gradient at all. The 95th percentile
     of |pressure| tracks the field's actual range while ignoring the extreme
     few particles inside the source cluster, which would otherwise set a scale
