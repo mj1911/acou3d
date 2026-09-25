@@ -64,11 +64,28 @@ length). Because `c0` (343 m/s) is much faster than any liquid-SPH flow
 speed, this is the dominant timestep constraint and the main performance
 lever (see Performance Scope).
 
-**Driving source**: a small cluster of particles at the domain center given
-a prescribed oscillating radial velocity, `v(t) = A * sin(2*pi*f*t)` —
-approximating a monopole point source.
+**Driving source**: a smooth radial body force centred on the domain,
+`dv/dt = a(t) * (r_vec / sigma) * exp(-r^2 / (2 sigma^2))` with
+`sigma = 1.5 h` (~2 particle spacings) — a monopole that no particle is
+pinned to. The demo shapes `a(t)` into repeating Hann-windowed bursts
+(3 cycles on, 10 off).
 
-**Open/absorbing boundary**: a sponge shell near the domain edge that ramps
+*Revised 2026-09-25.* The original source prescribed the velocity of the
+~8 particles nearest the centre, `v(t) = A * sin(2*pi*f*t)`. Neighbouring
+source particles then move in opposite directions, a pattern ~1 spacing long,
+and measurement showed ~99% of the output went into SPH waves 2–3 spacings
+long. Those lie past the kernel's dispersion ceiling (frequency peaks at
+~c0 / (4.8 dx), where group speed falls to zero) on the branch where
+frequency falls again, and carry energy at ~110–175 m/s: measured energy
+speeds matched that branch's predicted group speed within ~7% at 300, 500
+and 800 Hz. Real sound got ~1%. Making the pinned sphere larger did not help
+(its hard edge is still lattice-scale). The smooth force has negligible
+spatial content at lattice scale, and energy now travels at ~c0 in all
+directions (see the propagation test below). `source.apply_monopole` is kept,
+with its unit tests, but the demo no longer uses it.
+
+**Open/absorbing boundary** *(revised 2026-09-25: now impedance-matched; see
+below)*: a sponge shell near the domain edge that ramps
 up artificial damping on particle velocity, so outgoing waves attenuate
 rather than reflecting back into the domain — approximates free-field
 (infinite space) so results are comparable to the analytic monopole
@@ -112,9 +129,10 @@ it needs a device-to-host copy).
 |---|---|
 | `air_sph/sph.py` | Cubic-spline kernel, density summation, pressure (linear EOS), pressure-gradient + viscosity forces, leapfrog integration |
 | `air_sph/grid.py` | Dense fixed-capacity uniform grid (`cell_size = 2h`); rebuilt each step; 27-cell (3×3×3) neighbor iteration; `check_no_overflow()` capacity sanity check |
-| `air_sph/source.py` | Monopole driver: prescribes velocity on a small particle cluster |
+| `air_sph/source.py` | Monopole drivers: smooth radial body force (used by the demo); legacy prescribed-velocity cluster |
 | `air_sph/boundary.py` | Sponge-layer damping near domain edges |
 | `air_sph/viewer.py` | Taichi GGUI real-time 3D particle view, colored by pressure perturbation |
+| `air_sph/validation.py` | Independent 3D FDTD reference solver (pure numpy) driven by the same source; shared energy-arrival measurement; `python -m air_sph.validation` compares it with the SPH demo |
 | `air_sph/demo.py` | CLI: builds particle lattice, wires solver/source/boundary/viewer together; supports headless/offline mode |
 
 ## Data flow (per simulation step)
@@ -163,6 +181,47 @@ style (e.g. `test_bem.py`'s "within 2%" checks):
    earlier version used a damping coefficient ~100× too weak, leaving a
    technically-correct but completely inert boundary that no other test
    noticed.
+
+4. **Propagation tests** (`test_propagation.py`) run the demo's own
+   pipeline and defaults against the FDTD reference driven by the identical
+   force, checking what the first-arrival test above cannot see:
+   - *Burst matches the reference*: at 0.10–0.40 m, each probe's burst is
+     cross-correlated with the reference's inside the drive window, so tails
+     can't bias it. It requires correlation > 0.95, |lag| < 0.25 ms, and a speed
+     from the lags within 0.9–1.1 c0. Measured: lags +0.06 to +0.09 ms,
+     correlation ≥ 0.98. The old pinned-cluster source fails it (correlation
+     down to 0.54, 189 m/s).
+   - *Shell doesn't reflect*: under 6% of the energy at 0.20–0.40 m may arrive
+     after the burst has passed. Measured 1.2–2.2%; 5–16% with the old
+     velocity-only sponge.
+
+   An earlier version timed energy centroids over the whole record. Post-burst
+   tails biased it in both directions (375 m/s with the reflecting sponge,
+   221 m/s with the matched one, for the same main burst), which is why it
+   now compares waveforms.
+
+**Impedance-matched absorbing shell (2026-09-25).** Damping only velocity
+changes the shell's acoustic impedance, so outgoing waves partly reflect off
+the damping gradient, and at 500 Hz the 0.2 m shell is under a third of a
+wavelength thick. `boundary.relax_pressure` now also damps pressure at the
+same rate, by relaxing each shell particle's rest density toward its current
+density. With p and v damped equally, the outgoing and incoming wave
+components stay decoupled, so there's no reflection at normal incidence for
+any ramp (the same principle as the FDTD reference's sponge). The post-burst
+tail fell from 5–16% to 1.2–2.2%.
+
+   **Timing against the reference (2026-09-25).** Energy-arrival times for
+   SPH trail the FDTD reference by a near-constant ~0.75 ms at 0.25–0.40 m.
+   That is not a propagation delay. Cross-correlating the main burst alone
+   gives a lag of only ~0.04–0.11 ms (default domain) and ~0.08 ms (with a
+   waveform correlation of 0.995 in a doubled domain), consistent with SPH
+   dispersion at these wavelengths. The energy centroid is pulled late by a
+   post-burst tail that the reference doesn't have: 5–16% of the probe
+   energy in the default domain, falling to 1–5% when the absorbing shell is
+   0.4 m thick (as in the reference) instead of 0.2 m. So the tail is mostly
+   reflection from the default shell, which is under a third of a wavelength
+   thick at 500 Hz. The residual 1–5% and a ~12–16% higher SPH amplitude at
+   0.2–0.4 m remain unexplained.
 
 **Deferred (not delivered in v1): precise 1/r amplitude-scaling validation.**
 The original target above — 1/r falloff "within a few percent, consistent with
@@ -216,6 +275,7 @@ python-taichi/
     boundary.py
     viewer.py
     demo.py
+    validation.py
   tests/
     conftest.py          # session-scoped ti.init fixture, shared by all tests
     test_setup.py
@@ -225,6 +285,8 @@ python-taichi/
     test_boundary.py
     test_stability.py
     test_monopole.py
+    test_propagation.py
+    test_validation.py   # the FDTD reference itself travels at c0
 ```
 
 ## Performance scope (v1)
@@ -246,6 +308,15 @@ on, and faster again on the GPU backend the viewer path selects. The timestep,
 not the particle count, is the dominant cost driver: the acoustic CFL condition
 `dt < C·h/c0` gives `dt ≈ 3.9e-5 s` here, so a millisecond of simulated time is
 ~26 steps.
+
+*Revised 2026-09-25:* the demo now defaults to **500 Hz at 20 particles per
+wavelength** (`--n 40`, 64,000 particles), the same 34 mm spacing and cost as
+1 kHz at 10. Its dispersion ceiling is ~1.27 kHz, and a 1 kHz drive sits too
+close to it: 1 kHz energy travels at only ~0.7 c0, and a burst's upper
+spectrum reaches frequencies where energy barely moves. The resulting ringing
+near the source was measured at 1,323 Hz, against a predicted ceiling of 1,270 Hz.
+At 500 Hz, the burst's spectrum stays well below the ceiling. The cost is
+wider rings (0.69 m wavelength in a 1.34 m domain).
 
 Genuinely deferred: substantially larger domains, and the much higher
 resolution/step count that quantitative 1/r amplitude validation would need
