@@ -22,4 +22,5 @@ python -m venv .venv
 .venv/bin/python -m air_sph.demo                  # interactive viewer
 .venv/bin/python -m air_sph.demo --offline         # headless, prints probe data
 .venv/bin/python -m pytest -q
+.venv/bin/python -m pytest -n auto -q         # same, parallelized across CPU cores
 ```
