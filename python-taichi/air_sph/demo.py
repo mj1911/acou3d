@@ -63,6 +63,23 @@ def update_colors(pressure: ti.template(), colors: ti.template(), n: ti.i32, sca
             colors[i] = ti.Vector([0.9 + 0.7 * p, 0.9 + 0.7 * p, 0.9])
 
 
+# Taichi's GGUI particle renderer has no alpha/transparency channel, so
+# "97% transparent" for near-zero-pressure (white) particles is approximated
+# by shrinking their radius instead: 3% of base_radius at p=0, scaling up to
+# the full base_radius as |p| -> 1. This reads visually like fading out the
+# quiescent background while keeping the propagating wavefront full-size and
+# prominent, without needing renderer support that doesn't exist.
+_MIN_RADIUS_FRACTION = 0.03
+
+
+@ti.kernel
+def update_radii(pressure: ti.template(), radii: ti.template(), n: ti.i32, scale: ti.f32, base_radius: ti.f32):
+    for i in range(n):
+        p = abs(pressure[i]) / scale
+        p = min(p, 1.0)
+        radii[i] = base_radius * (_MIN_RADIUS_FRACTION + (1.0 - _MIN_RADIUS_FRACTION) * p)
+
+
 def build_sim(freq, ppw, n_per_axis):
     dx = (sph.C0 / freq) / ppw
     h = 1.3 * dx
@@ -166,6 +183,8 @@ def main():
     damping_max = 5.0 * sph.C0 / (r_domain - r_start)
 
     colors = ti.Vector.field(3, dtype=ti.f32, shape=solver.n) if not args.offline else None
+    radii = ti.field(dtype=ti.f32, shape=solver.n) if not args.offline else None
+    base_radius = 0.3 * dx
     viewer = Viewer() if not args.offline else None
 
     t = 0.0
@@ -188,9 +207,10 @@ def main():
         else:
             if not viewer.running:
                 break
-            update_colors(solver.pressure, colors, solver.n,
-                          color_scale(solver.pressure.to_numpy()))
-            viewer.render(solver.pos, radius=0.3 * dx, colors_field=colors)
+            scale = color_scale(solver.pressure.to_numpy())
+            update_colors(solver.pressure, colors, solver.n, scale)
+            update_radii(solver.pressure, radii, solver.n, scale, base_radius)
+            viewer.render(solver.pos, radius=base_radius, colors_field=colors, radii_field=radii)
 
 
 if __name__ == "__main__":

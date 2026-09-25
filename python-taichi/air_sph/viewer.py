@@ -15,12 +15,15 @@ class Viewer:
     def running(self):
         return self.window.running
 
-    def render(self, pos_field, radius, colors_field):
+    def render(self, pos_field, radius, colors_field, radii_field=None):
         scene = self.window.get_scene()
         self.camera.track_user_inputs(self.window, movement_speed=0.03, hold_key=ti.ui.RMB)
         scene.set_camera(self.camera)
         scene.ambient_light((0.6, 0.6, 0.6))
         scene.point_light(pos=(2, 2, 2), color=(1, 1, 1))
-        scene.particles(pos_field, radius=radius, per_vertex_color=colors_field)
+        # per_vertex_radius, when given, takes priority over the flat `radius`
+        # (which still sets the size for any caller that doesn't pass one).
+        scene.particles(pos_field, radius=radius, per_vertex_color=colors_field,
+                         per_vertex_radius=radii_field)
         self.canvas.scene(scene)
         self.window.show()
