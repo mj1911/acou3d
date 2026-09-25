@@ -19,6 +19,15 @@ directions (+-x, +-y, +-z) at each radius rather than a single direction
 measurement noise (a single-direction probe is sensitive to local
 particle-placement asymmetry in a way that washes out once averaged over
 the sphere), far more so than fine-tuning the exact radii.
+
+Note: averaging over 6 symmetric directions means this test cannot
+distinguish a genuinely isotropic monopole source from an anisotropic
+one that happens to produce similar direction-averaged readings (e.g.
+a source that only drives particles in one hemisphere). Source
+direction-vector correctness at the implementation level is covered by
+air_sph's source-driver unit tests instead; this test validates wave
+propagation physics given a (trusted) source, not source symmetry
+itself.
 """
 import numpy as np
 import pytest
