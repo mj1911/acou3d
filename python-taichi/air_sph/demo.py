@@ -164,7 +164,7 @@ def main():
     parser.add_argument("--steps", type=int, default=600)
     parser.add_argument("--freq", type=float, default=1000.0)
     parser.add_argument("--ppw", type=int, default=10, help="particles per wavelength")
-    parser.add_argument("--n", type=int, default=35, help="particles per axis")
+    parser.add_argument("--n", type=int, default=40, help="particles per axis")
     args = parser.parse_args()
 
     init_taichi(args.offline)
