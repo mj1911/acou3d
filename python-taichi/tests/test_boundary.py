@@ -7,8 +7,6 @@ import taichi as ti
 
 from air_sph import boundary
 
-ti.init(arch=ti.cpu)
-
 
 def test_sponge_damps_outer_particle_more_than_inner():
     n = 2
@@ -30,7 +28,7 @@ def test_sponge_damps_outer_particle_more_than_inner():
 
 def test_sponge_ramp_shape_quadratic():
     """Verify the damping ramp is quadratic in s, not linear or inverted.
-    Tests particles at s=0.25, 0.5, 0.75 and verifies:
+    Tests particles at 4 sample points, s=0.25, 0.5, 0.75, 1.0, and verifies:
     1. Monotonic damping (increasing r → smaller velocity)
     2. Matches closed-form exp(-damping_max * s**2 * dt)
     """

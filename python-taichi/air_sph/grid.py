@@ -11,6 +11,13 @@ import taichi as ti
 @ti.data_oriented
 class Grid:
     def __init__(self, n_cells, cell_size, grid_min, max_particles, max_per_cell=128):
+        # NOTE: `max_particles` is currently unused and vestigial -- it sizes
+        # nothing here, because the per-cell particle lists are sized by
+        # max_per_cell and the cell grid by n_cells. It is kept in the
+        # signature deliberately, as API documentation: callers state the
+        # particle count they intend to use with this grid, which makes the
+        # intended capacity explicit at every construction site. It is not
+        # load-bearing, so do not rely on it to bound anything.
         self.n_cells = n_cells
         self.cell_size = cell_size
         self.max_per_cell = max_per_cell
@@ -41,6 +48,45 @@ class Grid:
     def build(self, pos: ti.template(), n: ti.i32):
         for p in range(n):
             c = self.cell_coord(pos[p])
+            # Reproducibility note: this atomic_add races -- which slot a
+            # particle lands in within its cell depends on the order the
+            # parallel-for threads happen to reach this line, so the
+            # per-cell particle ordering is not reproducible run to run.
+            # compute_density/compute_forces then sum float32 neighbor
+            # contributions in that varying order, and float32 addition is
+            # not associative, so bit-identical inputs can yield
+            # bit-different results across runs (amplified over many
+            # integration steps).
+            #
+            # This is a reproducibility property, not a correctness bug: the
+            # differences are last-bits rounding, not qualitative -- dynamics
+            # stay bounded and physically equivalent. Independently verified
+            # in this project's Task 11 investigation and again by the final
+            # whole-branch review. Tests that need run-to-run stable
+            # measurements must average over samples (as test_monopole.py's
+            # 6-direction probe averaging does) rather than assume
+            # bit-reproducibility.
             slot = ti.atomic_add(self.cell_count[c[0], c[1], c[2]], 1)
             if slot < self.max_per_cell:
                 self.cell_particles[c[0], c[1], c[2], slot] = p
+
+    def check_no_overflow(self):
+        """Assert no cell received more particles than `max_per_cell`.
+
+        `build()` silently drops particles past slot `max_per_cell` (the
+        bounds check there has no else-branch), which would quietly shrink
+        neighbor lists and corrupt density/force sums with no visible error.
+        This makes that failure mode detectable.
+
+        Deliberately NOT called from the per-step simulation loop: it needs a
+        `.to_numpy()` device-to-host copy of the whole cell-count array, far
+        too slow to do every step. Call it once after the initial `build()` --
+        the lattice is densest and most uniform at t=0, and the small
+        acoustic displacements this project models (verified max ~2e-4*dx)
+        cannot push a cell over capacity later if it had headroom then.
+        """
+        peak = int(self.cell_count.to_numpy().max())
+        assert peak <= self.max_per_cell, (
+            f"cell_count reached {peak} > max_per_cell={self.max_per_cell} -- particles "
+            "were silently dropped from the neighbor search; raise max_per_cell"
+        )

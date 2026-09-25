@@ -4,8 +4,6 @@ import taichi as ti
 
 from air_sph import sph
 
-ti.init(arch=ti.cpu)
-
 
 @ti.kernel
 def _eval_w(r: ti.f32, h: ti.f32) -> ti.f32:

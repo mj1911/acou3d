@@ -10,8 +10,6 @@ from air_sph import sph
 from air_sph.grid import Grid
 from air_sph.sph import Solver
 
-ti.init(arch=ti.cpu)
-
 
 def _build_lattice(n_per_axis, dx):
     coords = (np.arange(n_per_axis) - (n_per_axis - 1) / 2) * dx
@@ -44,6 +42,12 @@ def test_still_box_remains_stable():
     grid.build(solver.pos, n)
     solver.compute_density()
     solver.capture_rest_density()
+
+    # One-time neighbor-list capacity check: build() silently drops particles
+    # past max_per_cell, which would corrupt every density/force sum without
+    # raising anything. Checked once here rather than per step (it needs a
+    # to_numpy copy) -- see Grid.check_no_overflow.
+    grid.check_no_overflow()
 
     dt = 0.3 * h / sph.C0
     n_steps = 300

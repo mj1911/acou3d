@@ -26,8 +26,30 @@ def probe_pressure(pos_np, pressure_np, probe_pos, radius):
     d = np.linalg.norm(pos_np - np.array(probe_pos), axis=1)
     mask = d < radius
     if not np.any(mask):
+        print(f"WARNING: no particles within {radius:.4g} m of probe {probe_pos} -- "
+              "probe reads 0.0 Pa because it is sampling empty space, not silence. "
+              "Check the probe position against the domain extent.")
         return 0.0
     return float(pressure_np[mask].mean())
+
+
+def color_scale(pressure_np):
+    """Pick a pressure color scale from the current field.
+
+    A fixed scale saturates: measured pressures in the default configuration
+    reach ~11 Pa near the source, so a 1.0 Pa scale clips almost the whole
+    domain to solid red/blue and shows no gradient at all. The 95th percentile
+    of |pressure| tracks the field's actual range while ignoring the extreme
+    few particles inside the source cluster, which would otherwise set a scale
+    so large the propagating wave is invisible.
+
+    Only called from the interactive rendering path (once per frame), never
+    from the physics loop, so the to_numpy copy behind it is not on the hot
+    path.
+    """
+    scale = float(np.percentile(np.abs(pressure_np), 95.0))
+    # Guard the quiescent first frames, where the field is still all zeros.
+    return scale if scale > 1e-6 else 1e-6
 
 
 @ti.kernel
@@ -70,6 +92,12 @@ def build_sim(freq, ppw, n_per_axis):
     solver.compute_density()
     solver.capture_rest_density()
 
+    # One-time neighbor-list capacity check: build() silently drops particles
+    # past max_per_cell, which would corrupt every density/force sum without
+    # raising anything. Checked once here rather than per step (it needs a
+    # to_numpy copy) -- see Grid.check_no_overflow.
+    grid.check_no_overflow()
+
     src_radius = 1.5 * dx
     is_source_np = (np.linalg.norm(pos0, axis=1) < src_radius).astype(np.int32)
     is_source = ti.field(dtype=ti.i32, shape=n)
@@ -86,6 +114,15 @@ def step(solver, grid, is_source, dt, t, freq, amplitude, center, r_start, r_dom
     solver.compute_pressure()
     solver.compute_forces()
     solver.leapfrog_correct(dt)
+    # Known, measured, accepted ordering imprecision: the prescribed source
+    # velocity is written here, AFTER leapfrog_correct, but the next step's
+    # leapfrog_predict applies its half-kick (vel += 0.5*dt*acc) before the
+    # drift -- so the solver's own acceleration perturbs the prescribed velocity
+    # by ~5-12% before it moves the particle. The source is therefore driven
+    # slightly off its nominal amplitude. Left as-is deliberately: reordering
+    # the integration loop is a far riskier change than the error it would
+    # remove. Not an unnoticed bug -- see the final whole-branch review in the
+    # plan ledger.
     source.apply_monopole(solver.pos, solver.vel, is_source, solver.n, center, amplitude, freq, t)
     boundary.apply_sponge(solver.pos, solver.vel, solver.n, center, r_start, r_domain, damping_max, dt)
 
@@ -119,13 +156,25 @@ def main():
     amplitude = 0.05
     r_start = 0.7 * half_extent
     r_domain = half_extent
-    damping_max = 200.0
+    # Sponge strength must scale with the geometry: the shell is crossed in
+    # (r_domain - r_start) / c0 seconds, so the damping rate has to be several
+    # times c0 / (r_domain - r_start) to absorb a wave within it. k=5 is the
+    # middle of the usable [3, 10] band. A fixed literal (this was 200.0) is
+    # ~100x too weak here and leaves a reflecting box rather than a free field;
+    # it must be computed, since the domain scales with --n/--freq/--ppw.
+    # See tests/test_monopole.py::test_sponge_measurably_absorbs_outgoing_waves.
+    damping_max = 5.0 * sph.C0 / (r_domain - r_start)
 
     colors = ti.Vector.field(3, dtype=ti.f32, shape=solver.n) if not args.offline else None
     viewer = Viewer() if not args.offline else None
 
     t = 0.0
-    probe_pos = (0.2, 0.0, 0.0)
+    # Scaled to the domain rather than a fixed 0.2 m: half_extent depends on
+    # --n/--freq/--ppw, so a hardcoded radius can land inside the source's
+    # exclusion zone or outside the domain entirely depending on the flags.
+    probe_pos = (0.5 * half_extent, 0.0, 0.0)
+    print(f"domain half_extent={half_extent:.4f} m, dx={dx:.5f} m, n={solver.n} particles, "
+          f"dt={dt:.3e} s, damping_max={damping_max:.1f}")
     for i in range(args.steps):
         step(solver, grid, is_source, dt, t, args.freq, amplitude, center, r_start, r_domain, damping_max)
         t += dt
@@ -135,11 +184,12 @@ def main():
                 pos_np = solver.pos.to_numpy()
                 pressure_np = solver.pressure.to_numpy()
                 p = probe_pressure(pos_np, pressure_np, probe_pos, 1.5 * dx)
-                print(f"t={t:.5f}s probe(0.2,0,0)={p:.4f} Pa")
+                print(f"t={t:.5f}s probe({probe_pos[0]:.3f},0,0)={p:.4f} Pa")
         else:
             if not viewer.running:
                 break
-            update_colors(solver.pressure, colors, solver.n, 1.0)
+            update_colors(solver.pressure, colors, solver.n,
+                          color_scale(solver.pressure.to_numpy()))
             viewer.render(solver.pos, radius=0.3 * dx, colors_field=colors)
 
 

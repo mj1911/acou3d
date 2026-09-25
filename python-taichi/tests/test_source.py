@@ -7,8 +7,6 @@ import taichi as ti
 
 from air_sph import source
 
-ti.init(arch=ti.cpu)
-
 
 def test_monopole_sets_prescribed_velocity_on_source_particles_only():
     n = 2

@@ -3,8 +3,6 @@ import taichi as ti
 
 from air_sph.grid import Grid
 
-ti.init(arch=ti.cpu)
-
 
 def test_build_places_each_particle_in_exactly_one_cell():
     n = 50

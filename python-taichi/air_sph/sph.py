@@ -93,7 +93,16 @@ class Solver:
         under-estimate density against the global RHO0 (a discretization
         artifact, not a real density gradient); comparing against their own
         captured value instead makes pressure exactly zero everywhere at
-        t=0, regardless of that artifact."""
+        t=0, regardless of that artifact.
+
+        The captured reference is per-particle and Lagrangian: it is tied to
+        each particle's own initial neighborhood, so it stays valid only while
+        particles remain near their initial positions (true for the
+        small-amplitude acoustic perturbations this project models -- verified
+        max displacement ~2e-4*dx). It would need re-capturing if this solver
+        were ever reused with significant mean flow or large-amplitude motion,
+        where particles migrate into genuinely different neighborhoods and a
+        frozen t=0 reference would no longer describe their rest state."""
         for i in range(self.n):
             self.rho0[i] = self.rho[i]
 
