@@ -117,3 +117,14 @@ class Solver:
                                     pi_visc = (-ALPHA_VISC * C0 * mu) / rho_bar
                                     a -= self.mass * pi_visc * gw
             self.acc[i] = a
+
+    @ti.kernel
+    def leapfrog_predict(self, dt: ti.f32):
+        for i in range(self.n):
+            self.vel[i] += 0.5 * dt * self.acc[i]
+            self.pos[i] += dt * self.vel[i]
+
+    @ti.kernel
+    def leapfrog_correct(self, dt: ti.f32):
+        for i in range(self.n):
+            self.vel[i] += 0.5 * dt * self.acc[i]

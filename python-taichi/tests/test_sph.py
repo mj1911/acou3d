@@ -151,3 +151,23 @@ def test_viscosity_damps_approaching_particles():
     # particle 1 moving toward particle 0 should likewise decelerate.
     assert acc[0][0] < 0.0
     assert acc[1][0] > 0.0
+
+
+def test_leapfrog_matches_constant_acceleration_kinematics():
+    n = 1
+    grid = Grid(n_cells=4, cell_size=1.0, grid_min=(-2.0, -2.0, -2.0), max_particles=n)
+    solver = Solver(n, h=0.1, mass=1.0, grid=grid)
+    solver.pos.from_numpy(np.array([[0.0, 0.0, 0.0]], dtype=np.float32))
+    solver.vel.from_numpy(np.array([[1.0, 0.0, 0.0]], dtype=np.float32))
+    solver.acc.from_numpy(np.array([[0.0, -9.8, 0.0]], dtype=np.float32))
+
+    dt = 0.01
+    n_steps = 50
+    for _ in range(n_steps):
+        solver.leapfrog_predict(dt)
+        solver.leapfrog_correct(dt)
+
+    t = dt * n_steps
+    pos = solver.pos.to_numpy()[0]
+    assert pos[0] == pytest.approx(1.0 * t, rel=1e-4)
+    assert pos[1] == pytest.approx(0.5 * -9.8 * t ** 2, rel=1e-4)
