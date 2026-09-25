@@ -63,13 +63,26 @@ def color_scale(pressure_np):
     few particles inside the source cluster, which would otherwise set a scale
     so large the propagating wave is invisible.
 
+    The percentile alone over-amplifies quiescent periods (startup, and the
+    silent gaps in the demo's burst-gated source): with no real signal, the
+    field is still all float32 rounding noise from SPH density summation
+    (~0.01-0.03 Pa typical, up to ~0.08 Pa observed, amplified through the
+    C0^2 term in the linear EOS -- same class of artifact as the pressure
+    test's rounding-floor finding, see tests/test_sph.py). A percentile-only
+    scale treats that noise as if it were the signal and stretches it to the
+    full color range, showing as speckling across the whole particle field.
+    Flooring the scale at 0.1 Pa -- comfortably above the measured noise
+    ceiling, comfortably below real driven/propagating signal (0.1+ Pa once
+    a wave is actually moving through, 14+ Pa near an active source) -- keeps
+    quiet periods visually quiet without washing out real signal.
+
     Only called from the interactive rendering path (once per frame), never
     from the physics loop, so the to_numpy copy behind it is not on the hot
     path.
     """
+    _NOISE_FLOOR_PA = 0.1
     scale = float(np.percentile(np.abs(pressure_np), 95.0))
-    # Guard the quiescent first frames, where the field is still all zeros.
-    return scale if scale > 1e-6 else 1e-6
+    return scale if scale > _NOISE_FLOOR_PA else _NOISE_FLOOR_PA
 
 
 @ti.kernel
