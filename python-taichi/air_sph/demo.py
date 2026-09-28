@@ -4,6 +4,7 @@ boundary, and (optionally) the real-time viewer into one simulation loop.
 Usage:
     python -m air_sph.demo                    # interactive viewer
     python -m air_sph.demo --slice            # 2D cross-section through the source
+    python -m air_sph.demo --slice --screenshot frame.png   # save one frame, no window
     python -m air_sph.demo --offline --steps 200
 """
 import argparse
@@ -246,7 +247,14 @@ def main():
     parser.add_argument("--n", type=int, default=DEFAULT_N, help="particles per axis")
     parser.add_argument("--slice", action="store_true",
                         help="show only the particle layer through the source, viewed face-on")
+    parser.add_argument("--screenshot", metavar="FILE",
+                        help="render off-screen, save one frame to FILE and exit")
+    parser.add_argument("--screenshot-ms", type=float,
+                        help="simulated time of the screenshot in ms (default: first burst's "
+                             "centre halfway to the absorbing shell)")
     args = parser.parse_args()
+    if args.screenshot and args.offline:
+        parser.error("--screenshot needs the renderer; drop --offline")
 
     init_taichi(args.offline)
 
@@ -275,9 +283,17 @@ def main():
         in_slice = ti.field(dtype=ti.i32, shape=solver.n)
         in_slice.from_numpy(mask_np.astype(np.int32))
         # Face-on along -z; far enough back that the whole slice fits the default 45 deg FOV.
-        viewer = Viewer(camera_pos=(0.0, 0.0, 2.6 * half_extent))
+        viewer = Viewer(camera_pos=(0.0, 0.0, 2.6 * half_extent), show_window=not args.screenshot)
     else:
-        viewer = Viewer() if not args.offline else None
+        viewer = Viewer(show_window=not args.screenshot) if not args.offline else None
+
+    if args.screenshot:
+        if args.screenshot_ms is None:
+            burst_centre = (WARMUP_PERIODS + ACTIVE_CYCLES / 2) / args.freq
+            shot_t = burst_centre + 0.5 * r_start / sph.C0
+        else:
+            shot_t = args.screenshot_ms * 1e-3
+        args.steps = int(np.ceil(shot_t / dt))
 
     t = 0.0
     # Scaled to the domain rather than a fixed 0.2 m: half_extent depends on
@@ -298,7 +314,9 @@ def main():
                 p = probe_pressure(pos_np, pressure_np, probe_pos, 1.5 * dx)
                 print(f"t={t:.5f}s probe({probe_pos[0]:.3f},0,0)={p:.4f} Pa")
         else:
-            if not viewer.running:
+            if args.screenshot and i < args.steps - 1:
+                continue  # only the final frame is rendered
+            if not args.screenshot and not viewer.running:
                 break
             pressure_np = solver.pressure.to_numpy()
             if in_slice is not None:
@@ -310,6 +328,10 @@ def main():
                 update_colors(solver.pressure, colors, solver.n, scale)
                 update_radii(solver.pressure, radii, solver.n, scale, base_radius)
             viewer.render(solver.pos, radius=base_radius, colors_field=colors, radii_field=radii)
+
+    if args.screenshot:
+        viewer.window.save_image(args.screenshot)
+        print(f"saved t={t * 1e3:.2f} ms frame to {args.screenshot}")
 
 
 if __name__ == "__main__":
